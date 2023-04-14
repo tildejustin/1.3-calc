@@ -1,2 +1,6 @@
 # Default ignored files
 .idea
+1.3_calc.json
+dist
+build
+1.3_calc.spec
