@@ -7,7 +7,7 @@ from typing import Union, List
 def match_line(line: str, patterns: List[re.Pattern]):
     for pattern in patterns:
         if (result := pattern.match(line)) is not None:
-            return result.groups()
+            return tuple(map(int, result.groups()))
 
 #
 # # stolen from easy-multi
