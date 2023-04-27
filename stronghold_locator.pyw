@@ -1,12 +1,13 @@
 import dataclasses
 import enum
+import math
 import re
 import subprocess
 import threading
 import time
+import tkinter as tk
 import typing
 from pathlib import Path
-import tkinter as tk
 from tkinter import ttk
 from typing import Optional
 
@@ -80,16 +81,22 @@ class StrongholdSource(enum.StrEnum):
     invalid = "blue"
     proximity = "green"
     guess = "red"
+    other = "yellow"
 
 
-@dataclasses.dataclass
 class Stronghold:
-    x: int
+    x: int = dataclasses.field()
     y: int
     source: str
 
+    def __init__(self, coords: typing.Union[tuple[int, int], tuple[int, ...]], source: StrongholdSource):
+        assert len(coords) == 2
+        self.x = coords[0]
+        self.y = coords[1]
+        self.source = source
+
     def get_coords(self) -> tuple[int, int]:
-        return self.x * 16 + 4, self.y * 16 + 4
+        return self.x, self.y
 
     def __str__(self):
         return ", ".join(map(str, self.get_coords()))
@@ -97,28 +104,44 @@ class Stronghold:
 
 @dataclasses.dataclass
 class StrongholdRing:
-    center_x = 7
-    center_y = 84
-    radius = 896  # (1152-640)/2+640, probably mostly correct
+    center_x: int = 7
+    center_y: int = 84
+    radius: int = 896  # (1152 - 640) / 2 + 640, probably mostly correct
     known_strongholds: list[Stronghold] = dataclasses.field(default_factory=list)
 
-    def guess_strongholds(self) -> list[Stronghold]:
-        if len(self.known_strongholds) == 3:
-            return []
-        if len(self.known_strongholds) == 2:
-            return []
-        if len(self.known_strongholds) == 1:
-            return []
-        if len(self.known_strongholds) == 0:
-            return []
+    def get_angle(self, stronghold: Stronghold) -> float:
+        return math.atan2(stronghold.y - self.center_y, stronghold.x - self.center_x) % math.tau
 
-    def add_stronghold(self, coords: tuple[int, int], source: StrongholdSource):
-        stronghold = Stronghold(coords[0], coords[1], source)
+    def guess_strongholds(self) -> list[Stronghold]:
+        guesses: list[Stronghold] = []
+        if len(self.known_strongholds) == 3:
+            return guesses
+        if len(self.known_strongholds) == 0:
+            return guesses
+        angle = self.get_angle(self.known_strongholds[0])
+        assert angle >= 0
+        if len(self.known_strongholds) == 2:
+            angle2 = self.get_angle(self.known_strongholds[1])
+            angle3 = (angle + angle2) / 2
+            if abs(angle - angle2) < math.pi:
+                angle3 += math.pi
+            guesses.append(Stronghold(self.get_coords(angle3), StrongholdSource.guess))
+            return guesses
+        if len(self.known_strongholds) == 1:
+            guesses.append(Stronghold(self.get_coords((angle + math.tau / 3) % math.tau), StrongholdSource.guess))
+            guesses.append(Stronghold(self.get_coords((angle + math.tau * 2 / 3) % math.tau), StrongholdSource.guess))
+            return guesses
+
+    def add_stronghold(self, coords: tuple[int, ...], source: StrongholdSource):
+        stronghold = Stronghold(tuple((coord * 16 + 4 for coord in coords)), source)
         if not self.has_stronghold(stronghold):
             self.known_strongholds.append(stronghold)
 
     def has_stronghold(self, stronghold: Stronghold) -> bool:
         return len(list(filter(lambda sh: sh.x == stronghold.x and sh.y == stronghold.y, self.known_strongholds))) == 1
+
+    def get_coords(self, angle: float) -> tuple[int, int]:
+        return int(self.center_x + self.radius * math.cos(angle)), int(self.center_y + self.radius * math.sin(angle))
 
 
 def get_focus_handles() -> tuple[int, int]:
@@ -127,15 +150,55 @@ def get_focus_handles() -> tuple[int, int]:
     return hwnd, pid
 
 
-class Locator:
+class Instance:
     ring: StrongholdRing
-    logs: dict[Path, typing.IO] = dict()
-    current_logs: Path = None
-    instance_dir: str
-    stronghold_text: list[ttk.Label]
-    window_name = tk.StringVar
+    logs: typing.IO
+    paused: bool
+    # manager: Locator
     invalid_biome_stronghold: re.Pattern = re.compile(r"^Placed stronghold in INVALID biome at \((-?\d+), (-?\d+)\)$")
     proximity_stronghold: re.Pattern = re.compile(r"^(-?\d+), (-?\d+)$")
+
+    def __init__(self, logs: typing.IO, manager):
+        self.paused = True
+        self.manager = manager
+        self.logs = logs
+        self.ring = StrongholdRing()
+
+    def run(self):
+        self.manager.update_text(self.ring)
+        self.paused = False
+        while not self.paused:
+            line = self.logs.readline()
+            if not line.__contains__("\n"):
+                time.sleep(1)
+                continue
+            if line == "Scanning folders...\n":
+                self.ring = StrongholdRing()
+                self.manager.update_text(self.ring)
+            # there has got to be a cleaner way to do this
+            source = None
+            match = self.invalid_biome_stronghold.match(line)
+            if match:
+                source = StrongholdSource.invalid
+            else:
+                match = self.proximity_stronghold.match(line)
+                if match:
+                    source = StrongholdSource.proximity
+            if match:
+                assert source is not None
+                self.ring.add_stronghold(tuple(map(int, match.groups())), source)
+                self.manager.update_text(self.ring)
+        print("pausing " + self.logs.name.split("\\")[-4])
+
+    def pause(self):
+        self.paused = True
+
+
+class Locator:
+    instances: dict[Path, Instance] = dict()
+    current_logs: Path = None
+    stronghold_text: list[ttk.Label]
+    window_name = tk.StringVar
 
     def __init__(self, stronghold_text: list[ttk.Label], instance_dir: str, window_name: tk.StringVar):
         self.stronghold_text = stronghold_text
@@ -150,18 +213,22 @@ class Locator:
         hwnd, pid = get_focus_handles()
         new_logs = self.get_logs(self.get_directory(pid))
         if new_logs:
-            if str(new_logs) not in self.logs:
-                self.logs.__setitem__(new_logs, new_logs.open())
+            if new_logs not in self.instances:
+                print("new instance")
+                self.instances[new_logs] = Instance(new_logs.open(), self)
             if new_logs != self.current_logs:
-                print("new logs")
+                print("switch instance")
+                if self.current_logs:
+                    self.instances.get(self.current_logs).pause()
                 self.current_logs = new_logs
                 self.set_window_name(win32gui.GetWindowText(hwnd), pid)
-                threading.Thread(target=lambda: self.thread(self.logs.get(self.current_logs))).start()
+                threading.Thread(target=lambda: self.instances.get(self.current_logs).run()).start()
 
     def get_directory(self, pid: int) -> Optional[Path]:
         # ~~stolen~~ adapted from easy-multi
-        cmd = f'powershell.exe "$proc = Get-WmiObject Win32_Process -Filter \\"ProcessId = {str(pid)}\\";$proc.CommandLine"'
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
+        cmd = f'powershell.exe "$proc = Get-WmiObject Win32_Process -Filter \\"ProcessId = {str(pid)}\\"; ' \
+              '$proc.CommandLine"'
+        p = subprocess.Popen(args=cmd, stdout=subprocess.PIPE, shell=True)
         response = p.communicate()[0].decode()
         # print(pid, self.instance_dir, response)
         if self.instance_dir in response:
@@ -170,7 +237,8 @@ class Locator:
             return Path(response[start:end])
         return None
 
-    def get_logs(self, instance_dir: Optional[Path]) -> Optional[Path]:
+    @classmethod
+    def get_logs(cls, instance_dir: Optional[Path]) -> Optional[Path]:
         if instance_dir is None:
             return None
         logs = instance_dir.joinpath(".minecraft/logs/latest.log")
@@ -178,33 +246,9 @@ class Locator:
             return None
         return logs
 
-    # noinspection PyTypeChecker
-    def thread(self, log_file: typing.IO):
-        while True:
-            line = log_file.readline()
-            if not line.__contains__("\n"):
-                time.sleep(1)
-                continue
-            if line == "Scanning folders...\n":
-                self.ring = StrongholdRing()
-                self.update_text()
-            # there has got to be a cleaner way to do this
-            source = None
-            match = self.invalid_biome_stronghold.match(line)
-            if match:
-                source = StrongholdSource.invalid
-            else:
-                match = self.proximity_stronghold.match(line)
-                if match:
-                    source = StrongholdSource.proximity
-            if match:
-                assert source is not None
-                self.ring.add_stronghold(tuple(map(int, match.groups())), source)
-                self.update_text()
-
-    def update_text(self):
-        strongholds = self.ring.known_strongholds + self.ring.guess_strongholds()
-        # assert len(strongholds) == 3 or len(strongholds) == 0
+    def update_text(self, ring: StrongholdRing):
+        strongholds = ring.known_strongholds + ring.guess_strongholds()
+        assert len(strongholds) == 3 or len(strongholds) == 0
         if len(strongholds) == 0:
             for stronghold_text in self.stronghold_text:
                 stronghold_text.configure(foreground="black", text="unknown")
