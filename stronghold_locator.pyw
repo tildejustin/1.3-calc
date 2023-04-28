@@ -1,35 +1,30 @@
 import dataclasses
 import enum
+import json
 import math
+import os
+import pathlib
 import re
 import subprocess
 import threading
 import time
 import tkinter as tk
 import typing
-from pathlib import Path
 from tkinter import ttk
-from typing import Optional
 
 import win32gui
 import win32process
 
 
 class Config:
-    instance_dir: Path
+    instance_dir: pathlib.Path
     font_size: int
     interval: int
 
     def __init__(self, instance_dir: str, font_size=10, interval=1000):
-        self.instance_dir = Path(instance_dir)
+        self.instance_dir = pathlib.Path(instance_dir)
         self.font_size = font_size
         self.interval = interval
-
-
-# TODO: reimplement this
-# noinspection SpellCheckingInspection
-def get_config() -> Config:
-    return Config(r"C:\Users\justi\Documents\Programs\MultiMC\instances", font_size=12, interval=2500)
 
 
 class Window(tk.Tk):
@@ -37,11 +32,12 @@ class Window(tk.Tk):
     window_name: tk.StringVar
     logs: dict[str]
     locator: typing.Any
+    config_file: pathlib.Path
 
     def __init__(self):
         super().__init__()
-
-        self.config = get_config()
+        self.config_file = pathlib.Path(os.path.join(os.curdir, "stronghold_locator.json"))
+        self.config = self.get_config()
         self.create_widgets()
         if self.config.instance_dir.exists():
             self.after(1, self.loop)
@@ -73,8 +69,26 @@ class Window(tk.Tk):
         self.locator = Locator(stronghold_text, str(self.config.instance_dir), self.window_name)
 
     def loop(self):
+        # needs to be threaded so the powershell call doesn't make the window stutter while moving around
         threading.Thread(target=self.locator.check_window).start()
         self.after(self.config.interval, self.loop)
+
+    # noinspection SpellCheckingInspection
+    def get_config(self) -> Config:
+        if not self.config_file.exists():
+            with self.config_file.open("w") as file:
+                json.dump(
+                    {
+                        "instance": r"C:\Users\justi\Documents\Programs\MultiMC\instances",
+                        "font_size": 12,
+                        "interval": 2000
+                    },
+                    file,
+                    indent=2
+                )
+        with self.config_file.open("r") as file:
+            config: dict = json.load(file)
+            return Config(config.get("instance"), config.get("font_size"), config.get("interval"))
 
 
 class StrongholdSource(enum.StrEnum):
@@ -85,7 +99,7 @@ class StrongholdSource(enum.StrEnum):
 
 
 class Stronghold:
-    x: int = dataclasses.field()
+    x: int
     y: int
     source: str
 
@@ -195,8 +209,8 @@ class Instance:
 
 
 class Locator:
-    instances: dict[Path, Instance] = dict()
-    current_logs: Path = None
+    instances: dict[pathlib.Path, Instance] = dict()
+    current_logs: pathlib.Path = None
     stronghold_text: list[ttk.Label]
     window_name = tk.StringVar
 
@@ -206,7 +220,7 @@ class Locator:
         self.window_name = window_name
         self.set_window_name("unknown", None)
 
-    def set_window_name(self, name: str, pid: Optional[int]) -> None:
+    def set_window_name(self, name: str, pid: typing.Optional[int]) -> None:
         self.window_name.set(f"window: {name} ({'unknown' if pid is None else pid})")
 
     def check_window(self):
@@ -224,7 +238,7 @@ class Locator:
                 self.set_window_name(win32gui.GetWindowText(hwnd), pid)
                 threading.Thread(target=lambda: self.instances.get(self.current_logs).run()).start()
 
-    def get_directory(self, pid: int) -> Optional[Path]:
+    def get_directory(self, pid: int) -> typing.Optional[pathlib.Path]:
         # ~~stolen~~ adapted from easy-multi
         cmd = f'powershell.exe "$proc = Get-WmiObject Win32_Process -Filter \\"ProcessId = {str(pid)}\\"; ' \
               '$proc.CommandLine"'
@@ -234,11 +248,11 @@ class Locator:
         if self.instance_dir in response:
             start = response.index(self.instance_dir)
             end = response.index(r"/", start + len(self.instance_dir) + 1)
-            return Path(response[start:end])
+            return pathlib.Path(response[start:end])
         return None
 
     @classmethod
-    def get_logs(cls, instance_dir: Optional[Path]) -> Optional[Path]:
+    def get_logs(cls, instance_dir: typing.Optional[pathlib.Path]) -> typing.Optional[pathlib.Path]:
         if instance_dir is None:
             return None
         logs = instance_dir.joinpath(".minecraft/logs/latest.log")

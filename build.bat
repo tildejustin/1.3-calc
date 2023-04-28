@@ -1,1 +1,1 @@
-pyinstaller -F 1.3_calc.pyw
+pyinstaller -F stronghold_locator.pyw
