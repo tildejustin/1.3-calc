@@ -59,9 +59,7 @@ class Window(tk.Tk):
             windll.shcore.SetProcessDpiAwareness(1)
         self.window_name = tk.StringVar()
         #  = [tk.StringVar(value="unknown") for _ in range(3)]
-        ttk.Label(self, textvariable=self.window_name, font=("", self.config.font_size)).grid(row=0, column=0,
-                                                                                              columnspan=3, padx=5,
-                                                                                              pady=5)
+        ttk.Label(self, textvariable=self.window_name, font=("", self.config.font_size)).grid(row=0, column=0, columnspan=3, padx=5, pady=5)
 
         stronghold_text = [ttk.Label(self, text="unknown", font=("", self.config.font_size)) for _ in range(3)]
         for i, sh_text in enumerate(stronghold_text):
@@ -128,23 +126,20 @@ class StrongholdRing:
 
     def guess_strongholds(self) -> list[Stronghold]:
         guesses: list[Stronghold] = []
-        if len(self.known_strongholds) == 3:
-            return guesses
-        if len(self.known_strongholds) == 0:
-            return guesses
-        angle = self.get_angle(self.known_strongholds[0])
-        assert angle >= 0
-        if len(self.known_strongholds) == 2:
-            angle2 = self.get_angle(self.known_strongholds[1])
-            angle3 = (angle + angle2) / 2
-            if abs(angle - angle2) < math.pi:
-                angle3 += math.pi
-            guesses.append(Stronghold(self.get_coords(angle3), StrongholdSource.guess))
-            return guesses
-        if len(self.known_strongholds) == 1:
-            guesses.append(Stronghold(self.get_coords((angle + math.tau / 3) % math.tau), StrongholdSource.guess))
-            guesses.append(Stronghold(self.get_coords((angle + math.tau * 2 / 3) % math.tau), StrongholdSource.guess))
-            return guesses
+        stronghold_count = len(self.known_strongholds)
+        if 3 > stronghold_count > 0:
+            angle = self.get_angle(self.known_strongholds[0])
+            assert angle >= 0
+            if stronghold_count == 2:
+                angle2 = self.get_angle(self.known_strongholds[1])
+                angle3 = (angle + angle2) / 2
+                if abs(angle - angle2) < math.pi:
+                    angle3 += math.pi
+                guesses.append(Stronghold(self.get_coords(angle3), StrongholdSource.guess))
+            elif stronghold_count == 1:
+                guesses.append(Stronghold(self.get_coords((angle + math.tau / 3) % math.tau), StrongholdSource.guess))
+                guesses.append(Stronghold(self.get_coords((angle + math.tau * 2 / 3) % math.tau), StrongholdSource.guess))
+        return guesses
 
     def add_stronghold(self, coords: tuple[int, ...], source: StrongholdSource):
         stronghold = Stronghold(tuple((coord * 16 + 4 for coord in coords)), source)
@@ -183,7 +178,7 @@ class Instance:
         self.paused = False
         while not self.paused:
             line = self.logs.readline()
-            if not line.__contains__("\n"):
+            if "\n" not in line:
                 time.sleep(1)
                 continue
             if line == "Scanning folders...\n":
@@ -239,7 +234,7 @@ class Locator:
                 threading.Thread(target=lambda: self.instances.get(self.current_logs).run()).start()
 
     def get_directory(self, pid: int) -> typing.Optional[pathlib.Path]:
-        # ~~stolen~~ adapted from easy-multi
+        # ~~stolen~~ adapted from easy multi
         cmd = f'powershell.exe "$proc = Get-WmiObject Win32_Process -Filter \\"ProcessId = {str(pid)}\\"; ' \
               '$proc.CommandLine"'
         p = subprocess.Popen(args=cmd, stdout=subprocess.PIPE, shell=True)
