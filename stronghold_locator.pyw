@@ -77,7 +77,7 @@ class Window(tk.Tk):
             with self.config_file.open("w") as file:
                 json.dump(
                     {
-                        "instance": r"C:\Users\justi\Documents\Programs\MultiMC\instances",
+                        "instance": r"C:\Users\justi\AppData\Roaming\PrismLauncher\instances",
                         "font_size": 12,
                         "interval": 2000
                     },
